@@ -35,6 +35,18 @@ contract Henohenomoheji {
         return string(buffer);
     }
 
+    function pluck(
+        uint256 tokenId,
+        string memory component,
+        strings.slice[] memory sourceArray
+    ) internal view returns (strings.slice memory) {
+        uint256 rand = random(
+            string(abi.encodePacked(component, toString(tokenId)))
+        );
+        strings.slice memory output = sourceArray[rand % sourceArray.length];
+        return output;
+    }
+
     function face(
         uint256 tokenId
     ) internal view returns (strings.slice memory) {
@@ -400,49 +412,30 @@ contract Henohenomoheji {
         return (head.concat((_stuff_inside.concat(tail)).toSlice())).toSlice();
     }
 
-    /**
-     * @title Avatar Drawing
-     * @dev Generates a face image for a given token ID
-     */
     function draw(uint256 tokenId) public view returns (string memory) {
-        // Extract face parts and background color for the token ID
-        strings.slice memory face = face(tokenId);
-        strings.slice memory ear = ear(tokenId);
-        strings.slice memory eyebrows = eyebrows(tokenId);
-        strings.slice memory eyes = eyes(tokenId);
-        strings.slice memory nose = nose(tokenId);
-        strings.slice memory mouth = mouth(tokenId);
-        strings.slice memory backgroundColour = backgroundColour(tokenId);
-        // Create strings for each face part
-        strings.slice memory earString = makeEarString(ear);
-        strings.slice memory eyebrowsString = makeEyebrowsString(eyebrows);
-        strings.slice memory eyesString = makeEyesString(eyes);
-        strings.slice memory noseString = makeNoseString(nose);
-        strings.slice memory mouthString = makeMouthString(mouth);
-
-        // Combine face part strings into a basic face string
-        strings.slice memory basicFaceString = makeBasicFaceString(
-            earString,
-            eyebrowsString,
-            eyesString,
-            noseString,
-            mouthString
+        strings.slice memory _face = face(tokenId);
+        strings.slice memory _ear = ear(tokenId);
+        strings.slice memory _eyebrows = eyebrows(tokenId);
+        strings.slice memory _eyes = eyes(tokenId);
+        strings.slice memory _nose = nose(tokenId);
+        strings.slice memory _mouth = mouth(tokenId);
+        strings.slice memory _background_colour = backgroundColour(tokenId);
+        strings.slice memory _basicFaceString = makeBasicFaceString(
+            makeEarString(_ear),
+            makeEyebrowsString(_eyebrows),
+            makeEyesString(_eyes),
+            makeNoseString(_nose),
+            makeMouthString(_mouth)
         );
-
-        // Create a complete face string with face shape and background color
         strings.slice memory completeFace = makeCompleteFace(
-            face,
-            backgroundColour,
-            basicFaceString
+            _face,
+            _background_colour,
+            _basicFaceString
         );
-
-        // Wrap the complete face in a canvas with background color
         strings.slice memory drawing = wrapCanvas(
             completeFace,
-            backgroundColour
+            _background_colour
         );
-
-        // Return the final drawing as a string
         return drawing.toString();
     }
 }

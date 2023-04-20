@@ -48,25 +48,264 @@ contract AuctionQuizTest is Test {
     string public a0 = unicode"";
     string public q1 = unicode"きもち寫？";
     string public a1 = unicode"";
+    string public q2 = unicode"Eth點樣寫？";
+    string public a2 = unicode"";
+    string public q3 = unicode"色は匂えど？";
+    string public a3 = unicode"以呂波耳本部止";
+
+    address weth = 0xC02aaA39b223FE8D0A0e5C4F27eAD9083C756Cc2;
 
     function setUp() public {
         hoax(alice);
         henohenomoheji = new Henohenomoheji();
-        aq = new AuctionQuiz();
+        hoax(alice);
         jcz = new JCZ("Jyutcitzi", unicode"");
-        jcz.setDescriptor(henohenomoheji);
-        jcz.setMinter(aq);
+        hoax(alice);
+        aq = new AuctionQuiz(weth, address(jcz), 1, 0.005 ether, 100, 100);
+        hoax(alice);
+        jcz.setDescriptor(address(henohenomoheji));
+        hoax(alice);
+        jcz.setMinter(address(aq));
+        hoax(alice);
     }
 
-    // function test_owner() public {
-    //     assertTrue(jcz.owner() == alice);
-    // }
+    function get_current_auction_qid() public returns (uint256 qid) {
+        (
+            uint256 qid,
+            uint256 attempts,
+            bool answered,
+            uint256 tokenId,
+            uint256 startTime,
+            uint256 endTime,
+            address payable bidder,
+            bool settled,
+            uint256 amount
+        ) = aq.auction();
+        return qid;
+    }
 
+    function get_current_bidder() public returns (address biider) {
+        (
+            uint256 qid,
+            uint256 attempts,
+            bool answered,
+            uint256 tokenId,
+            uint256 startTime,
+            uint256 endTime,
+            address payable bidder,
+            bool settled,
+            uint256 amount
+        ) = aq.auction();
+        return bidder;
+    }
+
+    function get_current_amount() public returns (uint256 amount) {
+        (
+            uint256 qid,
+            uint256 attempts,
+            bool answered,
+            uint256 tokenId,
+            uint256 startTime,
+            uint256 endTime,
+            address payable bidder,
+            bool settled,
+            uint256 amount
+        ) = aq.auction();
+        return amount;
+    }
+
+    function get_startTime() public returns (uint256 startTime) {
+        (
+            uint256 qid,
+            uint256 attempts,
+            bool answered,
+            uint256 tokenId,
+            uint256 startTime,
+            uint256 endTime,
+            address payable bidder,
+            bool settled,
+            uint256 amount
+        ) = aq.auction();
+        return startTime;
+    }
+
+    function get_endTime() public returns (uint256 endTime) {
+        (
+            uint256 qid,
+            uint256 attempts,
+            bool answered,
+            uint256 tokenId,
+            uint256 startTime,
+            uint256 endTime,
+            address payable bidder,
+            bool settled,
+            uint256 amount
+        ) = aq.auction();
+        return endTime;
+    }
+
+    function propose_questions(uint256 num_of_questions) public {
+        if (1 <= num_of_questions) {
+            hoax(alice);
+            aq.proposeQuestion(q0, a0);
+        }
+        if (2 <= num_of_questions) {
+            hoax(alice);
+            aq.proposeQuestion(q1, a1);
+        }
+        if (2 <= num_of_questions) {
+            hoax(alice);
+            aq.proposeQuestion(q2, a2);
+        }
+        if (3 <= num_of_questions) {
+            hoax(alice);
+            aq.proposeQuestion(q3, a3);
+        }
+    }
+
+    function test_draw_henohenomoheji() public {
+        string memory image = henohenomoheji.draw(1);
+        console.log(image);
+    }
+
+    function test_owner() public {
+        console.log(address(aq.owner()));
+        assertTrue(aq.owner() == alice);
+    }
+
+    function test_propose_first_question() public {
+        assertEq(aq.questions_exhausted(), 0);
+        assertEq(aq.questions_supplied(), 0);
+        hoax(alice);
+
+        aq.proposeQuestion(q0, a0);
+        assertEq(aq.questions_supplied(), 1);
+        (
+            uint256 qid,
+            address proposer,
+            string memory question,
+            bytes32 hashedAnswer,
+            ,
+
+        ) = aq.qid_to_question(aq.questions_supplied());
+
+        assertEq(qid, 1);
+        assertEq(proposer, alice);
+        assertEq(question, q0);
+        assertEq(hashedAnswer, keccak256(abi.encodePacked(a0)));
+        (
+            uint256 qid_in_auction,
+            uint256 attempts,
+            bool answered,
+            uint256 tokenId,
+            uint256 startTime,
+            uint256 endTime,
+            address payable bidder,
+            bool settled,
+            uint256 amount
+        ) = aq.auction();
+        assertEq(qid_in_auction, 1);
+        assertEq(attempts, 0);
+        assertFalse(answered);
+        assertEq(tokenId, 1);
+        assertEq(bidder, address(0));
+        assertFalse(settled);
+        assertEq(amount, 0);
+    }
+
+    function test_proposing_another_question_does_not_mess_with_on_going_auction()
+        public
+    {
+        assertFalse(aq.auctionActive());
+        hoax(alice);
+        aq.proposeQuestion(q0, a0);
+        assertEq(aq.questions_supplied(), 1);
+        assertEq(aq.questions_exhausted(), 1); // auction created
+        assertTrue(aq.auctionActive());
+        (uint256 qid_in_auction0, , , , , , , , ) = aq.auction();
+        hoax(alice);
+        aq.proposeQuestion(q1, a1);
+        assertEq(aq.questions_supplied(), 2);
+        assertEq(aq.questions_exhausted(), 1);
+        (uint256 qid_in_auction1, , , , , , , , ) = aq.auction();
+        console.log(qid_in_auction0, qid_in_auction1);
+        assertEq(qid_in_auction0, qid_in_auction1);
+    }
+
+    function test_can_settle_auction() public {
+        hoax(alice);
+        aq.proposeQuestion(q0, a0);
+        startHoax(bob, 77 ether);
+        uint256 bob_balance = bob.balance;
+        console.log(bob_balance);
+        aq.answerQuestionWithBid{value: 10 ether}(a0);
+
+        assertEq(get_current_bidder(), bob);
+
+        vm.warp(120);
+        assertEq(jcz.ownerOf(1), address(aq));
+        aq.settleAuction();
+        assertEq(jcz.ownerOf(1), bob);
+    }
+
+    function test_can_settle_current_and_create_new_auction() public {
+        propose_questions(3);
+        assertEq(get_current_auction_qid(), 1);
+        hoax(bob);
+        aq.answerQuestionWithBid{value: 10 ether}(a0);
+        vm.warp(block.timestamp + 100);
+        aq.settleCurrentAndCreateNewAuction();
+        assertEq(get_current_auction_qid(), 2);
+        assertEq(jcz.ownerOf(1), bob);
+
+        hoax(carol);
+        aq.answerQuestionWithBid{value: 10 ether}(a1);
+        vm.warp(block.timestamp + 100);
+        aq.settleCurrentAndCreateNewAuction();
+        assertEq(jcz.ownerOf(2), carol);
+    }
+
+    function test_bidding_refunds_previous_bidder() public {
+        propose_questions(3);
+        hoax(bob, 100 ether);
+        aq.answerQuestionWithBid{value: 10 ether}(a0);
+        assertEq(get_current_bidder(), bob);
+        assertLt(get_current_amount(), 10 ether);
+
+        hoax(carol);
+        aq.answerQuestionWithBid{value: 11 ether}(a0);
+        assertEq(get_current_bidder(), carol);
+        assertLt(get_current_amount(), 11 ether);
+        assertGt(bob.balance, 10 ether);
+        console.log(bob.balance / (1 ether));
+    }
+
+    function test_bid_works() public {
+        propose_questions(3);
+        hoax(alice);
+        aq.setTax(100);
+        for (uint256 i = 0; i <= 100; i++) {
+            hoax(alice, 100 ether);
+            aq.answerQuestionWithBid{value: 10 ether}("rubbish");
+            console.log(aq.splitable(), aq.claimable(), aq.distributable());
+        }
+        hoax(bob, 100 ether);
+        aq.answerQuestionWithBid{value: 10 ether}(a0);
+        console.log(aq.splitable());
+        assertEq(get_current_bidder(), bob);
+        assertLt(get_current_amount(), 10 ether);
+        hoax(carol);
+        aq.answerQuestionWithBid{value: 11 ether}(a0);
+        console.log(aq.splitable());
+        assertEq(get_current_bidder(), carol);
+        assertLt(get_current_amount(), 11 ether);
+        console.log(aq.splitable());
+    }
     // function test_answering_increases_attempts() public {
     //     // proposing 100 questions
     //     for (uint256 i = 1; i <= 100; i++) {
     //         hoax(alice);
-    //         jcz.proposeQuestion(q0, a0);
+    //         aq.proposeQuestion(q0, a0);
     //     }
 
     //     // carol answers the same question (question1) 100 times - all wrong

@@ -1,16 +1,20 @@
 // SPDX-License-Identifier: UNLICENSED
 pragma solidity ^0.8.13;
 
+import {console} from "forge-std/console.sol";
 import {ERC721} from "solmate/tokens/ERC721.sol";
 import {Auth, Authority} from "solmate/auth/Auth.sol";
 import {Bytes32AddressLib} from "solmate/utils/Bytes32AddressLib.sol";
 import {IHenohenomoheji} from "./interfaces/IHenohenomoheji.sol";
+import {Henohenomoheji} from "./Henohenomoheji.sol";
+import {AuctionQuiz} from "./AuctionQuiz.sol";
 import {ReentrancyGuard} from "solmate/utils/ReentrancyGuard.sol";
 
 contract JCZ is ERC721, Auth, ReentrancyGuard {
     uint256 public totalSupply;
 
-    IHenohenomoheji public henohenomoheji;
+    address public henohenomoheji;
+    address public minter; // auctionQWuiz
 
     modifier onlyOwner() virtual {
         require(msg.sender == owner, "UNAUTHORIZED");
@@ -22,9 +26,7 @@ contract JCZ is ERC721, Auth, ReentrancyGuard {
         string memory _symbol
     ) ERC721(_name, _symbol) Auth(msg.sender, Authority(address(0))) {}
 
-    function setDescriptor(
-        IHenohenomoheji _henohenomoheji
-    ) external override onlyOwner {
+    function setDescriptor(address _henohenomoheji) external onlyOwner {
         henohenomoheji = _henohenomoheji;
     }
 
@@ -32,7 +34,6 @@ contract JCZ is ERC721, Auth, ReentrancyGuard {
         require(msg.sender == minter, "Sender is not the minter");
         _;
     }
-    address public minter;
 
     function setMinter(address _minter) public {
         minter = _minter;
@@ -48,7 +49,11 @@ contract JCZ is ERC721, Auth, ReentrancyGuard {
     function tokenURI(
         uint256 tokenId
     ) public view override returns (string memory) {
-        string memory tokenURI = henohenomoheji.draw(tokenId);
+        string memory tokenURI = IHenohenomoheji(henohenomoheji).draw(tokenId);
         return tokenURI;
+    }
+
+    function burn(uint256 tokenId) public onlyMinter {
+        _burn(tokenId);
     }
 }

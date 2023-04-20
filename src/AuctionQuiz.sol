@@ -12,36 +12,46 @@ import {SD59x18, sd, ln, div, unwrap, mul} from "@prb/math/SD59x18.sol";
 import {ReentrancyGuard} from "solmate/utils/ReentrancyGuard.sol";
 import {JCZ} from "./JCZ.sol";
 import {IWETH} from "./interfaces/IWETH.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {IJCZ} from "./interfaces/IJCZ.sol";
+import {IERC20} from "../lib/openzeppelin-contracts/contracts/token/ERC20/IERC20.sol";
+import {console} from "forge-std/console.sol";
 
 contract AuctionQuiz is Auth, ReentrancyGuard {
     using strings for *;
     using Bytes32AddressLib for address;
     using Bytes32AddressLib for bytes32;
 
-    constructor(address _weth) Auth(msg.sender, Authority(address(0))) {
+    constructor(
+        address _weth,
+        address _jcz,
+        uint256 _timeBuffer,
+        uint256 _reservePrice,
+        uint256 _minBidIncrementPercentage,
+        uint256 _duration
+    ) Auth(msg.sender, Authority(address(0))) {
         weth = _weth;
-    }
-
-    // This needs to be eventually replaced with interfaces
-    JCZ public jcz;
-
-    function setJCZ(JCZ _jcz) public {
         jcz = _jcz;
+
+        timeBuffer = _timeBuffer;
+        reservePrice = _reservePrice;
+        minBidIncrementPercentage = _minBidIncrementPercentage;
+        duration = _duration;
     }
+
+    address public jcz;
+    address public weth;
 
     bool public fees_on;
     uint256 public questions_supplied;
     uint256 public questions_exhausted;
     mapping(uint256 => Auction) public auctions;
     mapping(uint256 => uint256) public tokenId_to_balance;
+    mapping(uint256 => Question) public qid_to_question;
 
-    address public weth;
-
-    struct Auction {
+    struct Question {
         // Question data
         // ID for the question
-        uint256 questionId;
+        uint256 qid;
         // Proposer of the
         address proposer;
         // The question itself;
@@ -49,9 +59,13 @@ contract AuctionQuiz is Auth, ReentrancyGuard {
         // The answer, hashed
         bytes32 hashedAnswer;
         // Whether the question is legitimately about jyutcitzi
-        bool jcz;
+        bool isJcz;
         // The answer to the Question
         string answer;
+    }
+
+    struct Auction {
+        uint256 qid;
         // Number of attempts
         uint256 attempts;
         // Answered?
@@ -77,7 +91,7 @@ contract AuctionQuiz is Auth, ReentrancyGuard {
     uint256 public reservePrice;
 
     // The minimum percentage difference between the last bid amount and the current bid
-    uint8 public minBidIncrementPercentage;
+    uint256 public minBidIncrementPercentage;
 
     // The duration of a single auction
     uint256 public duration;
@@ -100,7 +114,7 @@ contract AuctionQuiz is Auth, ReentrancyGuard {
     event InitialAttemptFeeUpdated(uint256 initialAttemptFee);
 
     function setInitialAttemptFee(uint256 _initialAttemptFee) public onlyOwner {
-        initialAttemptFee = _initialAttemptFee;
+        initialAttemptFee = int256(_initialAttemptFee);
         emit InitialAttemptFeeUpdated(_initialAttemptFee);
     }
 
@@ -132,38 +146,93 @@ contract AuctionQuiz is Auth, ReentrancyGuard {
         return (uint256(totalCost));
     }
 
+    bool public auctionActive;
+
+    uint256 public splitable;
+
+    mapping(uint256 => bool) public tokenId_to_active;
+
+    function splitFees() internal {
+        // Get the count of active tokenIds
+        uint256 activeTokenCount = 0;
+        for (uint256 i = 0; i < IJCZ(jcz).totalSupply(); i++) {
+            if (tokenId_to_active[i]) {
+                activeTokenCount++;
+            }
+        }
+
+        // Calculate the share for each active tokenId
+        uint256 share = 0;
+        if (activeTokenCount > 0) {
+            share = splitable / activeTokenCount;
+        }
+
+        // Update the balance of each active tokenId
+        for (uint256 i = 0; i < IJCZ(jcz).totalSupply(); i++) {
+            if (tokenId_to_active[i]) {
+                tokenId_to_balance[i] += share;
+            }
+        }
+
+        // Reset the splitable amount
+        splitable = 0;
+    }
+
     function proposeQuestion(
         string memory _q,
         string memory _a
     ) public requiresAuth {
-        uint256 current_question = questions_exhausted + 1;
-        Auction memory _auction = auction;
-        _auction.questionId = current_question;
-        _auction.proposer = msg.sender;
-        _auction.question = _q;
-        _auction.hashedAnswer = keccak256(abi.encodePacked(_a));
+        uint256 current_question = questions_supplied + 1;
+        Question memory _question = Question({
+            qid: current_question,
+            proposer: msg.sender,
+            question: _q,
+            hashedAnswer: keccak256(abi.encodePacked(_a)),
+            isJcz: false,
+            answer: ""
+        });
 
-        if (questions_supplied == questions_exhausted) {
+        // If the next qid has no question, then d
+        if (auctionActive == false) {
             _createAuction();
         }
+        // if (questions_supplied == questions_exhausted) {
+        //     _createAuction();
+        //     console.log("auction created!");
+        //     console.log("questions_supplied:", questions_supplied);
+        //     console.log("questions_exhausted:", questions_exhausted);
+        // }
         questions_supplied++;
+        qid_to_question[questions_supplied] = _question;
     }
 
     function _createAuction() internal {
-        try jcz.mint() returns (uint256 tokenId) {
-            auction.tokenId = tokenId;
-            uint256 startTime = block.timestamp;
-            uint256 endTime = startTime + duration;
+        uint256 _tokenId = IJCZ(jcz).mint();
 
-            auction.startTime == startTime;
-            auction.endTime = endTime;
-            auction.bidder = payable(0);
-            auction.settled = false;
-            emit AuctionCreated(tokenId, startTime, endTime);
-        } catch Error(string memory) {
-            _pause();
-        }
+        uint256 _startTime = block.timestamp;
+        uint256 _endTime = _startTime + duration;
+
+        questions_exhausted++;
+
+        Auction memory _auction = Auction({
+            qid: questions_exhausted,
+            attempts: 0,
+            answered: false,
+            tokenId: _tokenId,
+            startTime: _startTime,
+            endTime: _endTime,
+            bidder: payable(0),
+            settled: false,
+            amount: 0
+        });
+        auctionActive = true;
+        auction = _auction;
+        emit AuctionCreated(_tokenId, _startTime, _endTime);
     }
+
+    // }
+
+    event AuctionCreated(uint256 tokenid, uint256 startTime, uint256 endTime);
 
     function _settleAuction() internal {
         Auction memory _auction = auction;
@@ -174,45 +243,50 @@ contract AuctionQuiz is Auth, ReentrancyGuard {
             "Auction hasn't completed"
         );
         auction.settled = true;
-        questions_exhausted++;
         if (_auction.bidder == address(0)) {
-            jcz.burn(_auction.tokenId);
+            IJCZ(jcz).burn(_auction.tokenId);
         } else {
-            jcz.transferFrom(address(this), _auction.bidder, _auction.tokenId);
+            IJCZ(jcz).transferFrom(
+                address(this),
+                _auction.bidder,
+                _auction.tokenId
+            );
         }
 
         if (_auction.amount > 0) {
-            _safeTransferETHWithFallback(owner(), _auction.amount);
+            _safeTransferETHWithFallback(address(this), _auction.amount);
         }
+        auctionActive = false;
+        splitFees();
 
         emit AuctionSettled(_auction.tokenId, _auction.bidder, _auction.amount);
     }
 
-    bool pause;
+    bool paused;
+    event AuctionSettled(uint256 tokenId, address bidder, uint256 amount);
 
     function _pause() internal whenNotPaused {
-        pause = true;
+        paused = true;
     }
 
     function _unpause() internal whenPaused {
-        pause = false;
+        paused = false;
     }
 
     modifier whenPaused() {
-        require(pause == true, "Pause: not already paused");
+        require(paused == true, "Pause: not already paused");
         _;
     }
     modifier whenNotPaused() {
-        require(pause == false, "Pause: already paused");
+        require(paused == false, "Pause: already paused");
         _;
     }
 
     /**
-     * @notice Settle the current auction, mint a new Noun, and put it up for auction.
+     * @notice Settle the current auction, mint a new jcz, and put it up for auction.
      */
     function settleCurrentAndCreateNewAuction()
         external
-        override
         nonReentrant
         whenNotPaused
     {
@@ -224,7 +298,7 @@ contract AuctionQuiz is Auth, ReentrancyGuard {
      * @notice Settle the current auction.
      * @dev This function can only be called when the contract is paused.
      */
-    function settleAuction() external override whenPaused nonReentrant {
+    function settleAuction() external whenNotPaused nonReentrant {
         _settleAuction();
     }
 
@@ -234,7 +308,7 @@ contract AuctionQuiz is Auth, ReentrancyGuard {
      * contract is unpaused. While no new auctions can be started when paused,
      * anyone can settle an ongoing auction.
      */
-    function pause() external override onlyOwner {
+    function pause() external onlyOwner {
         _pause();
     }
 
@@ -243,7 +317,7 @@ contract AuctionQuiz is Auth, ReentrancyGuard {
      * @dev This function can only be called by the owner when the
      * contract is paused. If required, this function will start a new auction.
      */
-    function unpause() external override onlyOwner {
+    function unpause() external onlyOwner {
         _unpause();
 
         if (auction.startTime == 0 || auction.settled) {
@@ -255,7 +329,9 @@ contract AuctionQuiz is Auth, ReentrancyGuard {
         uint256 qid,
         string memory _a
     ) internal returns (bool correct) {
-        if (questions[qid].hashedAnswer == keccak256(abi.encodePacked(_a))) {
+        Question memory _question = qid_to_question[qid];
+
+        if (_question.hashedAnswer == keccak256(abi.encodePacked(_a))) {
             return true;
         } else {
             return false;
@@ -264,12 +340,12 @@ contract AuctionQuiz is Auth, ReentrancyGuard {
 
     uint256 public claimable;
     uint256 public distributable;
-    uint256 public tax; // in percentage
+    uint256 public tax; // in bips
 
     function setTax(int256 _tax) public onlyOwner {
         require(_tax <= 1000000, "too big a tax");
-        tax = _tax;
-        emit TaxSet(_tax);
+        tax = uint256(_tax);
+        emit TaxSet(tax);
     }
 
     event TaxSet(uint256 _tax);
@@ -282,9 +358,12 @@ contract AuctionQuiz is Auth, ReentrancyGuard {
         uint256 attemptFee = getAttemptFee();
         require(msg.value > attemptFee);
 
-        if (!_answer_is_correct(_a)) {
-            claimable = claimable + (msg.value) * ((1000000 - tax) / 1000000);
-            distributable = (+msg.value * tax) / 100000;
+        if (!_answer_is_correct(_auction.qid, _a)) {
+            // claimable is the amount claimable by the first person to answer correctly
+            claimable = claimable + (msg.value * (1000000 - tax)) / 1000000;
+            // distributable is the amount distributable to all JCZ holders
+            distributable = distributable + (msg.value * tax) / 100000;
+            // console.log((msg.value * tax) / 100000);
         } else {
             require(
                 msg.value >= reservePrice,
@@ -294,10 +373,11 @@ contract AuctionQuiz is Auth, ReentrancyGuard {
             require(
                 msg.value >=
                     _auction.amount +
-                        ((_auction.amount * minBidIncrementPercentage) / 100),
+                        ((_auction.amount * minBidIncrementPercentage) /
+                            100000),
                 "Must send more than last bid by minBidIncrementPercentage amount"
             );
-            if (!answered) {
+            if (!auction.answered) {
                 payable(msg.sender).call{value: claimable}("");
                 claimable = 0;
                 emit FirstToAnswer(auction, claimable, msg.sender);
@@ -305,10 +385,14 @@ contract AuctionQuiz is Auth, ReentrancyGuard {
             address payable lastBidder = _auction.bidder;
             // Refund the last bidder, if applicable
             if (lastBidder != address(0)) {
-                _safeTransferETHWithFallback(lastBidder, _auction.amount);
+                _safeTransferETHWithFallback(
+                    lastBidder,
+                    _auction.amount + msg.value / 1000
+                );
             }
-            auction.amount = msg.value;
+            auction.amount = msg.value - (msg.value / 1000);
             auction.bidder = payable(msg.sender);
+            // console.log("look!");
             // Extend the auction if the bid was received within `timeBuffer` of the auction end time
             bool extended = _auction.endTime - block.timestamp < timeBuffer;
             if (extended) {
@@ -317,13 +401,22 @@ contract AuctionQuiz is Auth, ReentrancyGuard {
                     timeBuffer;
             }
 
-            emit AuctionBid(_auction.nounId, msg.sender, msg.value, extended);
+            emit AuctionBid(_auction.tokenId, msg.sender, msg.value, extended);
 
             if (extended) {
-                emit AuctionExtended(_auction.nounId, _auction.endTime);
+                emit AuctionExtended(_auction.tokenId, _auction.endTime);
             }
         }
     }
+
+    event AuctionBid(
+        uint256 tokenId,
+        address bidder,
+        uint256 bid,
+        bool extended
+    );
+
+    event AuctionExtended(uint256 tokenId, uint256 endTime);
 
     /**
      * @notice Transfer ETH. If the ETH transfer fails, wrap the ETH and try send it as WETH.
@@ -334,6 +427,8 @@ contract AuctionQuiz is Auth, ReentrancyGuard {
             IERC20(weth).transfer(to, amount);
         }
     }
+
+    fallback() external payable {}
 
     /**
      * @notice Transfer ETH and return the success status.
@@ -363,7 +458,7 @@ contract AuctionQuiz is Auth, ReentrancyGuard {
             revert NoShare();
         }
 
-        if (this.ownerOf(tokenId) != msg.sender) {
+        if (IJCZ(jcz).ownerOf(tokenId) != msg.sender) {
             revert NotOwner();
         } else {
             (bool sent, ) = address(owner).call{value: share}("");
